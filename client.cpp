@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,11 +9,82 @@
 #include <sys/socket.h>
 #include <netinet/ip.h>
 
+static void msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+}
 
 static void die(const char *msg) {
     int err = errno;
     fprintf(stderr, "[%d] %s\n", err, msg);
     abort();
+}
+
+static int32_t read_full(int fd, char *buf, size_t n) {
+    while (n > 0) {
+        ssize_t rv = read(fd, buf, n);
+        if (rv <= 0) {
+            return -1;
+        }
+        assert((size_t)rv <= n);
+        n -= (size_t)rv;
+        buf += rv;
+    }
+    return 0;
+}
+
+static int32_t write_all(int fd, const char *buf, size_t n) {
+    while (n > 0) {
+        ssize_t rv = write(fd, buf, n);
+        if (rv <= 0) {
+            return -1;
+        }
+        assert((size_t)rv <= n);
+        n -= (size_t)rv;
+        buf += rv;
+    }
+    return 0;
+}
+
+const size_t k_max_msg = 4096;
+
+static int32_t query(int fd, const char *text) {
+    uint32_t len = (uint32_t)strlen(text);
+    if (len > k_max_msg) {
+        return -1;
+    }
+
+    // send request
+    char wbuf[4 + k_max_msg];
+    memcpy(wbuf, &len, 4);          // length prefix
+    memcpy(wbuf + 4, text, len);    // payload
+
+    if (write_all(fd, wbuf, 4 + len) < 0) {
+        msg("write_all failed");
+        return -1;
+    }
+
+    // read response header
+    char rbuf[4 + k_max_msg];
+    errno = 0;
+    if (read_full(fd, rbuf, 4) < 0) {
+        msg(errno == 0 ? "EOF" : "read error");
+        return -1;
+    }
+
+    memcpy(&len, rbuf, 4);
+    if (len > k_max_msg) {
+        msg("response too long");
+        return -1;
+    }
+
+    // read response body
+    if (read_full(fd, rbuf + 4, len) < 0) {
+        msg("read error");
+        return -1;
+    }
+
+    printf("server says: %.*s\n", len, rbuf + 4);
+    return 0;
 }
 
 int main() {
@@ -24,21 +96,18 @@ int main() {
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(1234);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 127.0.0.1
-    int rv = connect(fd, (const struct sockaddr *)&addr, sizeof(addr));
-    if (rv) {
-        die("connect");
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        die("connect()");
     }
 
-    char msg[] = "hello";
-    write(fd, msg, strlen(msg));
-
-    char rbuf[64] = {};
-    ssize_t n = read(fd, rbuf, sizeof(rbuf) - 1);
-    if (n < 0) {
-        die("read");
+    if (query(fd, "hello1") == 0 &&
+        query(fd, "hello2") == 0 &&
+        query(fd, "hello3") == 0) {
+        // all succeeded
     }
-    printf("server says: %s\n", rbuf);
+
     close(fd);
     return 0;
 }
