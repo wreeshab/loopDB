@@ -1,113 +1,100 @@
-#include <assert.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
 #include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/ip.h>
+#include <unistd.h>
+#include <vector>
+#include <string>
+#include <sstream>
+#include <iostream>
+#include <cstring>
 
-static void msg(const char *msg) {
-    fprintf(stderr, "%s\n", msg);
+using namespace std;
+
+static void write_u32(vector<uint8_t>& buf, uint32_t x) {
+    uint8_t* p = (uint8_t*)&x;
+    buf.insert(buf.end(), p, p + 4);
 }
 
-static void die(const char *msg) {
-    int err = errno;
-    fprintf(stderr, "[%d] %s\n", err, msg);
-    abort();
+static void write_str(vector<uint8_t>& buf, const string& s) {
+    write_u32(buf, s.size());
+    buf.insert(buf.end(), s.begin(), s.end());
 }
 
-static int32_t read_full(int fd, char *buf, size_t n) {
-    while (n > 0) {
-        ssize_t rv = read(fd, buf, n);
-        if (rv <= 0) {
-            return -1;
-        }
-        assert((size_t)rv <= n);
-        n -= (size_t)rv;
-        buf += rv;
+static vector<uint8_t> make_request(const vector<string>& cmd) {
+    vector<uint8_t> body;
+    write_u32(body, cmd.size());
+    for (auto& s : cmd) {
+        write_str(body, s);
     }
-    return 0;
+
+    vector<uint8_t> msg;
+    write_u32(msg, body.size());
+    msg.insert(msg.end(), body.begin(), body.end());
+    return msg;
 }
 
-static int32_t write_all(int fd, const char *buf, size_t n) {
-    while (n > 0) {
-        ssize_t rv = write(fd, buf, n);
-        if (rv <= 0) {
-            return -1;
-        }
-        assert((size_t)rv <= n);
-        n -= (size_t)rv;
-        buf += rv;
+static bool read_exact(int fd, void* buf, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t r = read(fd, (char*)buf + off, n - off);
+        if (r <= 0) return false;
+        off += r;
     }
-    return 0;
-}
-
-const size_t k_max_msg = 4096;
-
-static int32_t query(int fd, const char *text) {
-    uint32_t len = (uint32_t)strlen(text);
-    if (len > k_max_msg) {
-        return -1;
-    }
-
-    // send request
-    char wbuf[4 + k_max_msg];
-    memcpy(wbuf, &len, 4);          // length prefix
-    memcpy(wbuf + 4, text, len);    // payload
-
-    if (write_all(fd, wbuf, 4 + len) < 0) {
-        msg("write_all failed");
-        return -1;
-    }
-
-    // read response header
-    char rbuf[4 + k_max_msg];
-    errno = 0;
-    if (read_full(fd, rbuf, 4) < 0) {
-        msg(errno == 0 ? "EOF" : "read error");
-        return -1;
-    }
-
-    memcpy(&len, rbuf, 4);
-    if (len > k_max_msg) {
-        msg("response too long");
-        return -1;
-    }
-
-    // read response body
-    if (read_full(fd, rbuf + 4, len) < 0) {
-        msg("read error");
-        return -1;
-    }
-
-    printf("server says: %.*s\n", len, rbuf + 4);
-    return 0;
+    return true;
 }
 
 int main() {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        die("socket()");
-    }
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    struct sockaddr_in addr = {};
+    sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(1234);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        die("connect()");
+    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("connect");
+        return 1;
     }
 
-    if (query(fd, "hello1") == 0 &&
-        query(fd, "hello2") == 0 &&
-        query(fd, "hello3") == 0) {
-        // all succeeded
+    cout << "kv-cli connected. Type commands:\n";
+
+    string line;
+    while (true) {
+        cout << "> ";
+        if (!getline(cin, line)) break;
+
+        istringstream iss(line);
+        vector<string> cmd;
+        string s;
+        while (iss >> s) cmd.push_back(s);
+
+        if (cmd.empty()) continue;
+        if (cmd[0] == "quit" || cmd[0] == "exit") break;
+
+        auto req = make_request(cmd);
+        write(sock, req.data(), req.size());
+
+        uint32_t len = 0;
+        if (!read_exact(sock, &len, 4)) break;
+
+        uint32_t status = 0;
+        read_exact(sock, &status, 4);
+
+        vector<uint8_t> payload(len - 4);
+        if (!payload.empty()) {
+            read_exact(sock, payload.data(), payload.size());
+        }
+
+        if (status == 0) {
+            if (!payload.empty())
+                cout << string(payload.begin(), payload.end()) << "\n";
+            else
+                cout << "OK\n";
+        } else if (status == 2) {
+            cout << "(nil)\n";
+        } else {
+            cout << "(error)\n";
+        }
     }
 
-    close(fd);
+    close(sock);
     return 0;
 }
