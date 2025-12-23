@@ -1,5 +1,4 @@
-#pragma once
-
+#pragma once 
 #include<bits/stdc++.h>
 
 struct HashNode{
@@ -23,6 +22,6 @@ struct HashMap{
 
 HashNode* hmap_lookup (HashMap* hmap , HashNode * key, bool (*eq)(HashNode* , HashNode*));
 void hmap_insert(HashMap* hmap , HashNode * node);
-HashNode *hmap_delete ( HashMap*hmap, HashNode*key , bool(*eq)(HashNode* , HashNode ));
+HashNode *hmap_delete ( HashMap*hmap, HashNode*key , bool(*eq)(HashNode* , HashNode *));
 void hmap_clear(HashMap* hmap);
 size_t hmap_size(HashMap *hmap);

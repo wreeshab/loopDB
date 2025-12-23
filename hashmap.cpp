@@ -1,13 +1,13 @@
 #include<bits/stdc++.h>
 #include"hashmap.hpp"
-
+using namespace std;
 static void h_init( HashTable *ht , size_t n){
     assert( n > 0 && (n & (n-1)) ==0);
 
     ht->table = (HashNode**) calloc(n , sizeof( HashNode*));
     ht->size = 0;
     ht->mask = n-1;
-}
+}   
 
 static void h_insert ( HashTable *htab , HashNode* node){
     size_t pos = node->hCode & htab->mask;
@@ -78,7 +78,7 @@ HashNode* hmap_lookup (HashMap* hmap , HashNode * key, bool (*eq)(HashNode* , Ha
 
 const size_t k_max_load_factor = 8;
 
-void hm_insert(HashMap* hmap , HashNode * node){
+void hmap_insert(HashMap* hmap , HashNode * node){
     if(!hmap->new_table.table){
         h_init(&hmap->new_table , 4);
     }

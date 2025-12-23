@@ -6,8 +6,8 @@ CLIENT = client
 
 all: $(SERVER) $(CLIENT)
 
-$(SERVER): server.cpp
-	$(CXX) $(CXXFLAGS) -o $(SERVER) server.cpp
+$(SERVER): server.cpp hashmap.cpp hashmap.hpp util.hpp
+	$(CXX) $(CXXFLAGS) -o $(SERVER) server.cpp hashmap.cpp
 
 $(CLIENT): client.cpp
 	$(CXX) $(CXXFLAGS) -o $(CLIENT) client.cpp
