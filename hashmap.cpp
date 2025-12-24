@@ -105,5 +105,31 @@ HashNode *hmap_delete ( HashMap*hmap, HashNode*key , bool(*eq)(HashNode* , HashN
 }
 
 size_t hmap_size(HashMap* hmap){
+
     return hmap->new_table.size + hmap->old_table.size;
+}
+
+static bool h_foreach(HashTable *htab,
+                      bool (*f)(HashNode *, void *),
+                      void *arg) {
+    if (!htab->table) return true;
+
+    for (size_t i = 0; i <= htab->mask; i++) {
+        for (HashNode *node = htab->table[i];
+             node != nullptr;
+             node = node->next) {
+            if (!f(node, arg)) { // f always returns true for now.
+                return false;   // early stop
+            }
+        }
+    }
+    return true;
+}
+
+void hmap_for_each_key(HashMap *hmap,
+                bool (*f)(HashNode *, void *),
+                void *arg) {
+    // iterate new table first, then old table (during rehash)
+    if (!h_foreach(&hmap->new_table, f, arg)) return;
+    h_foreach(&hmap->old_table, f, arg);
 }

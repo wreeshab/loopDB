@@ -25,3 +25,4 @@ void hmap_insert(HashMap* hmap , HashNode * node);
 HashNode *hmap_delete ( HashMap*hmap, HashNode*key , bool(*eq)(HashNode* , HashNode *));
 void hmap_clear(HashMap* hmap);
 size_t hmap_size(HashMap *hmap);
+void hmap_for_each_key(HashMap* hmap, bool (*f)(HashNode* , void*), void* arg);

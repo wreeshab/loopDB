@@ -74,6 +74,58 @@ static void append_to_buffer(vector<uint8_t> &buffer, const uint8_t *data, size_
     buffer.insert(buffer.end(), data, data + len);
 }
 
+// helper functions for serializing data into buffer.
+static void append_to_buffer_u8(vector<uint8_t> & buffer, uint8_t data){
+    append_to_buffer(buffer, (const uint8_t*)&data, 1);
+}
+
+static void append_to_buffer_u32(vector<uint8_t> & buffer, uint32_t data){
+    append_to_buffer(buffer, (const uint8_t*)&data, 4);
+}
+
+static void append_to_buffer_u64(vector<uint8_t> &buffer, uint64_t data){
+    append_to_buffer(buffer, (const uint8_t*)& data, 8);
+}
+
+static void append_to_buffer_dbl(vector<uint8_t> &buffer, double data){
+    append_to_buffer(buffer, (const uint8_t*)&data, 4);
+}
+
+// helper function for serializing the response.
+static void out_nil(vector<uint8_t> &buffer){
+    append_to_buffer_u8(buffer, TAG_NIL);
+}
+
+static void out_str(vector<uint8_t> &buffer , const char* s , size_t size){
+    append_to_buffer_u8(buffer, TAG_STR);
+    append_to_buffer_u32(buffer, (uint32_t)size);
+    append_to_buffer(buffer, (const uint8_t*)s, size);
+}
+
+static void out_int(vector<uint8_t> &buffer, int64_t val){
+    append_to_buffer_u8(buffer, TAG_INT);
+    append_to_buffer_u64(buffer, val);
+}
+
+static void out_err(vector<uint8_t> &buffer, uint32_t code , const char* msg , size_t msg_len){
+    append_to_buffer_u8(buffer, TAG_ERR);
+    append_to_buffer_u32(buffer, code);
+    append_to_buffer_u32(buffer, (uint32_t) msg_len);
+    append_to_buffer(buffer, (const uint8_t*) msg , msg_len);
+}
+
+static void out_dbl(vector<uint8_t> &buffer, double val){
+    append_to_buffer_u8(buffer, TAG_DBL);
+    append_to_buffer_dbl(buffer, val);
+}
+
+// just inits the array.
+static void out_array_header(vector<uint8_t> &buffer, uint32_t count){
+    append_to_buffer_u8(buffer, TAG_ARR);
+    append_to_buffer_u32(buffer, count);
+}
+
+
 // TODO: optimise this later (o(n) right now), replace this with a ring buffer or use begin and end pointers/offsets.
 static void buffer_consume(vector<uint8_t> &buffer, size_t n){
     buffer.erase(buffer.begin() , buffer.begin() + n);
@@ -127,7 +179,10 @@ static int32_t parse_request(const uint8_t* data , size_t size, vector<string> &
 }
 
 
-static HashMap g_db;
+// static HashMap g_db;
+static struct {
+    HashMap hmap;
+} g_db;
 
 static bool entry_eq(HashNode *lhs, HashNode *rhs) {
     struct Entry *le = container_of(lhs,  Entry, node);
@@ -144,29 +199,46 @@ static uint64_t str_hash(const uint8_t *data, size_t len) {
     return h;
 }
 
-static void do_get(vector<string> &cmd, Response &out) {
+static bool cb_keys(HashNode* node, void* arg) {
+    // Pointer-style (valid, but more verbose)
+    // vector<uint8_t> *out = (vector<uint8_t> *)arg;
+
+    // Reference-style (preferred)
+    vector<uint8_t> &out = *(vector<uint8_t> *)arg;
+
+    const std::string &key = container_of(node, Entry, node)->key;
+    out_str(out, key.data(), key.size());
+    return true;   // continue iteration
+}
+
+static void do_keys (vector<string> &cmd,  vector<uint8_t> &out){
+    // init the array header.
+    out_array_header(out, hmap_size(&g_db.hmap));
+    hmap_for_each_key(&g_db.hmap, &cb_keys , (void *) &out);
+}
+
+static void do_get(vector<string> &cmd,  vector<uint8_t> &out) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hCode = str_hash(
         (uint8_t *)key.key.data(), key.key.size());
 
-    HashNode *node = hmap_lookup(&g_db, &key.node, entry_eq);
+    HashNode *node = hmap_lookup(&g_db.hmap, &key.node, entry_eq);
     if (!node) {
-        out.status = RES_NX;
-        return;
+        return out_nil(out);
     }
 
     const string &val = container_of(node, Entry, node)->val;
-    out.payload.assign(val.begin(), val.end());
+    return out_str(out, val.data(), val.size());
 }
 
-static void do_set(vector<string> &cmd, Response &out) {
+static void do_set(vector<string> &cmd,      vector<uint8_t> &out) {
     Entry probe;
     probe.key.swap(cmd[1]);
     probe.node.hCode = str_hash(
         (uint8_t *)probe.key.data(), probe.key.size());
 
-    HashNode *node = hmap_lookup(&g_db, &probe.node, entry_eq);
+    HashNode *node = hmap_lookup(&g_db.hmap, &probe.node, entry_eq);
     if (node) {
         container_of(node, Entry, node)->val.swap(cmd[2]);
     } else {
@@ -174,50 +246,75 @@ static void do_set(vector<string> &cmd, Response &out) {
         ent->key.swap(probe.key);
         ent->val.swap(cmd[2]);
         ent->node.hCode = probe.node.hCode;
-        hmap_insert(&g_db, &ent->node);
+        hmap_insert(&g_db.hmap, &ent->node);
     }
 
-    out.status = RES_OK;
-    out.payload.assign({'O', 'K'});
+    return out_nil(out);
 }
 
 
-static void do_del(vector<string> &cmd, Response &out) {
+static void do_del(vector<string> &cmd,  vector<uint8_t> &out) {
     Entry probe;
     probe.key.swap(cmd[1]);
     probe.node.hCode = str_hash(
         (uint8_t *)probe.key.data(), probe.key.size());
 
-    HashNode *node = hmap_delete(&g_db, &probe.node, entry_eq);
+    HashNode *node = hmap_delete(&g_db.hmap, &probe.node, entry_eq);
     if (node) {
         delete container_of(node, Entry, node);
     }
 
-    out.status = RES_OK;
-    out.payload.assign({'O', 'K'});
+    return out_nil(out);
 }
 
 
-static void do_request(vector<string> &cmd, Response &out) {
+static void do_request(vector<string> &cmd,  vector<uint8_t> &out) {
     if (cmd.size() == 2 && cmd[0] == "get") {
         return do_get(cmd, out);
     }
-    if (cmd.size() == 3 && cmd[0] == "set") {
+    else if (cmd.size() == 3 && cmd[0] == "set") {
         return do_set(cmd, out);
     }
-    if (cmd.size() == 2 && cmd[0] == "del") {
+    else if (cmd.size() == 2 && cmd[0] == "del") {
         return do_del(cmd, out);
+    }else if (cmd.size() ==1 && cmd[0] == "keys"){
+        return do_keys(cmd, out);
+    }else {
+        string err_msg = "unknown command";
+        return out_err(out, ERR_UNKNOWN, err_msg.data(), err_msg.size());
+        
     }
-
-    out.status = RES_ERR;
 }
 
 
-static void serialise_response(const Response &resp, vector<uint8_t> &out){
-    uint32_t resp_len = 4 + (uint32_t) resp.payload.size(); // 4 for status , and then payload.
-    append_to_buffer(out, (const uint8_t *)&resp_len, 4 );
-    append_to_buffer(out , (const uint8_t *)& resp.status , 4);
-    append_to_buffer(out , resp.payload.data()  , resp.payload.size());
+// static void serialise_response(const Response &resp, vector<uint8_t> &out){
+//     uint32_t resp_len = 4 + (uint32_t) resp.payload.size(); // 4 for status , and then payload.
+//     append_to_buffer(out, (const uint8_t *)&resp_len, 4 );
+//     append_to_buffer(out , (const uint8_t *)& resp.status , 4);
+//     append_to_buffer(out , resp.payload.data()  , resp.payload.size());
+// }
+
+static void start_serialise_response(vector<uint8_t> &out, size_t &header_pos){
+    header_pos = out.size();
+    // reserve space for total length - 4 bytes.
+    append_to_buffer_u32(out, 0);
+}
+
+static size_t response_payload_size(vector<uint8_t> &out , size_t header_pos){
+    return out.size()   - header_pos - 4;
+}
+
+static void end_serialise_response(vector<uint8_t> &out, size_t header_pos){
+    size_t total_msg_size = response_payload_size(out , header_pos);
+    if(total_msg_size > k_max_msg){
+        out.resize(header_pos + 4); // discard the whole message.
+        string err_msg = "response too big";
+        out_err(out, ERR_TOO_BIG, err_msg.data(), err_msg.size());
+        total_msg_size = response_payload_size(out , header_pos);
+    }
+    // fill in the total length of the message at header_pos.
+    uint32_t total_size_u32 = (uint32_t) total_msg_size;
+    memcpy(&out[header_pos], &total_size_u32, 4);
 }
 
 // actually parses the data accoring to our protocol.
@@ -252,12 +349,13 @@ static bool try_one_request(Conn *conn)
         conn->want_close = true;
         return false;
     }
-    // ----- execute -----
-    Response resp;
-    do_request(cmd , resp);
 
-    // ---- serialise -----
-    serialise_response(resp , conn->outgoing);
+    // ---- execute and serialise -----
+
+    size_t header_pos = 0;
+    start_serialise_response (conn->outgoing, header_pos);
+    do_request(cmd, conn->outgoing);
+    end_serialise_response(conn->outgoing , header_pos);
 
     // remove request from incoming buffer.
     buffer_consume(conn->incoming , 4 + len); 

@@ -5,12 +5,31 @@
 #include <sstream>
 #include <iostream>
 #include <cstring>
+#include <cstdint>
 
 using namespace std;
+
+enum {
+    TAG_NIL = 0,
+    TAG_ERR = 1,
+    TAG_STR = 2,
+    TAG_INT = 3,
+    TAG_DBL = 4,
+    TAG_ARR = 5,
+};
+
+enum {
+    ERR_UNKNOWN = 1,
+    ERR_TOO_BIG = 2,
+};
 
 static void write_u32(vector<uint8_t>& buf, uint32_t x) {
     uint8_t* p = (uint8_t*)&x;
     buf.insert(buf.end(), p, p + 4);
+}
+
+static void write_u8(vector<uint8_t>& buf, uint8_t x) {
+    buf.push_back(x);
 }
 
 static void write_str(vector<uint8_t>& buf, const string& s) {
@@ -41,6 +60,113 @@ static bool read_exact(int fd, void* buf, size_t n) {
     return true;
 }
 
+static void print_response(const vector<uint8_t>& resp_data, size_t& pos);
+
+static void print_array(const vector<uint8_t>& resp_data, size_t& pos) {
+    if (pos + 4 > resp_data.size()) {
+        cout << "(error: invalid array format)\n";
+        return;
+    }
+    uint32_t count;
+    memcpy(&count, &resp_data[pos], 4);
+    pos += 4;
+
+    cout << "[\n";
+    for (uint32_t i = 0; i < count; i++) {
+        cout << "  " << (i + 1) << ") ";
+        print_response(resp_data, pos);
+    }
+    cout << "]\n";
+}
+
+static void print_response(const vector<uint8_t>& resp_data, size_t& pos) {
+    if (pos >= resp_data.size()) {
+        cout << "(empty response)\n";
+        return;
+    }
+
+    uint8_t tag = resp_data[pos++];
+
+    switch (tag) {
+        case TAG_NIL:
+            cout << "(nil)\n";
+            break;
+        case TAG_ERR: {
+            if (pos + 4 > resp_data.size()) {
+                cout << "(error: invalid error format)\n";
+                break;
+            }
+            uint32_t err_code;
+            memcpy(&err_code, &resp_data[pos], 4);
+            pos += 4;
+            
+            if (pos + 4 > resp_data.size()) {
+                cout << "(error: invalid error format)\n";
+                break;
+            }
+            uint32_t msg_len;
+            memcpy(&msg_len, &resp_data[pos], 4);
+            pos += 4;
+
+            if (pos + msg_len > resp_data.size()) {
+                cout << "(error: invalid error format)\n";
+                break;
+            }
+            string err_msg(resp_data.begin() + pos, resp_data.begin() + pos + msg_len);
+            cout << "(error code " << err_code << "): " << err_msg << "\n";
+            pos += msg_len;
+            break;
+        }
+        case TAG_STR: {
+            if (pos + 4 > resp_data.size()) {
+                cout << "(error: invalid string format)\n";
+                break;
+            }
+            uint32_t str_len;
+            memcpy(&str_len, &resp_data[pos], 4);
+            pos += 4;
+
+            if (pos + str_len > resp_data.size()) {
+                cout << "(error: invalid string format)\n";
+                break;
+            }
+            string result(resp_data.begin() + pos, resp_data.begin() + pos + str_len);
+            cout << "\"" << result << "\"\n";
+            pos += str_len;
+            break;
+        }
+        case TAG_INT: {
+            if (pos + 8 > resp_data.size()) {
+                cout << "(error: invalid int format)\n";
+                break;
+            }
+            int64_t val;
+            memcpy(&val, &resp_data[pos], 8);
+            cout << val << "\n";
+            pos += 8;
+            break;
+        }
+        case TAG_DBL: {
+            if (pos + 8 > resp_data.size()) {
+                cout << "(error: invalid double format)\n";
+                break;
+            }
+            double val;
+            memcpy(&val, &resp_data[pos], 8);
+            cout << val << "\n";
+            pos += 8;
+            break;
+        }
+        case TAG_ARR: {
+            print_array(resp_data, pos);
+            break;
+        }
+        default:
+            cout << "(unknown tag: " << (int)tag << ")\n";
+            break;
+    }
+}
+
 int main() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -54,7 +180,15 @@ int main() {
         return 1;
     }
 
-    cout << "kv-cli connected. Type commands:\n";
+    cout << "╔══════════════════════════════════════════╗\n";
+    cout << "║     LoopDB Key-Value Store Client        ║\n";
+    cout << "╚══════════════════════════════════════════╝\n\n";
+    cout << "Available commands:\n";
+    cout << "  • set <key> <value>   - Store a key-value pair\n";
+    cout << "  • get <key>           - Retrieve value by key\n";
+    cout << "  • del <key>           - Delete a key\n";
+    cout << "  • keys                - List all keys\n";
+    cout << "  • quit / exit         - Disconnect\n\n";
 
     string line;
     while (true) {
@@ -72,27 +206,18 @@ int main() {
         auto req = make_request(cmd);
         write(sock, req.data(), req.size());
 
-        uint32_t len = 0;
-        if (!read_exact(sock, &len, 4)) break;
+        // Read message length
+        uint32_t msg_len = 0;
+        if (!read_exact(sock, &msg_len, 4)) break;
 
-        uint32_t status = 0;
-        read_exact(sock, &status, 4);
-
-        vector<uint8_t> payload(len - 4);
-        if (!payload.empty()) {
-            read_exact(sock, payload.data(), payload.size());
+        // Read message payload
+        vector<uint8_t> payload(msg_len);
+        if (msg_len > 0) {
+            if (!read_exact(sock, payload.data(), msg_len)) break;
         }
 
-        if (status == 0) {
-            if (!payload.empty())
-                cout << string(payload.begin(), payload.end()) << "\n";
-            else
-                cout << "OK\n";
-        } else if (status == 2) {
-            cout << "(nil)\n";
-        } else {
-            cout << "(error)\n";
-        }
+        size_t pos = 0;
+        print_response(payload, pos);
     }
 
     close(sock);
