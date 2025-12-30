@@ -1,6 +1,7 @@
 #pragma once
-#include <bits/stdc++.h>
+#include <string>
 #include <functional>
+#include <cstddef>
 
 using namespace std;
 
