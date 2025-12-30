@@ -16,6 +16,7 @@
 
 #include "util.hpp"
 #include "hashmap.hpp"
+#include "avl_tree.hpp"
 
 using namespace std;
 
@@ -182,6 +183,7 @@ static int32_t parse_request(const uint8_t* data , size_t size, vector<string> &
 // static HashMap g_db;
 static struct {
     HashMap hmap;
+    AVLTree avl;
 } g_db;
 
 static bool entry_eq(HashNode *lhs, HashNode *rhs) {
@@ -267,6 +269,34 @@ static void do_del(vector<string> &cmd,  vector<uint8_t> &out) {
     return out_nil(out);
 }
 
+// AVL Tree command handlers
+static void do_avl_keys(vector<string> &cmd, vector<uint8_t> &out) {
+    (void)cmd; // unused parameter
+    out_array_header(out, g_db.avl.size());
+    g_db.avl.for_each([&out](const string& key, const string& val) {
+        (void)val; // unused parameter
+        out_str(out, key.data(), key.size());
+    });
+}
+
+static void do_avl_get(vector<string> &cmd, vector<uint8_t> &out) {
+    string* val = g_db.avl.lookup(cmd[1]);
+    if (!val) {
+        return out_nil(out);
+    }
+    return out_str(out, val->data(), val->size());
+}
+
+static void do_avl_set(vector<string> &cmd, vector<uint8_t> &out) {
+    g_db.avl.insert(cmd[1], cmd[2]);
+    return out_nil(out);
+}
+
+static void do_avl_del(vector<string> &cmd, vector<uint8_t> &out) {
+    g_db.avl.remove(cmd[1]);
+    return out_nil(out);
+}
+
 
 static void do_request(vector<string> &cmd,  vector<uint8_t> &out) {
     if (cmd.size() == 2 && cmd[0] == "get") {
@@ -279,7 +309,21 @@ static void do_request(vector<string> &cmd,  vector<uint8_t> &out) {
         return do_del(cmd, out);
     }else if (cmd.size() ==1 && cmd[0] == "keys"){
         return do_keys(cmd, out);
-    }else {
+    }
+    // AVL tree commands
+    else if (cmd.size() == 2 && cmd[0] == "avl_get") {
+        return do_avl_get(cmd, out);
+    }
+    else if (cmd.size() == 3 && cmd[0] == "avl_set") {
+        return do_avl_set(cmd, out);
+    }
+    else if (cmd.size() == 2 && cmd[0] == "avl_del") {
+        return do_avl_del(cmd, out);
+    }
+    else if (cmd.size() == 1 && cmd[0] == "avl_keys") {
+        return do_avl_keys(cmd, out);
+    }
+    else {
         string err_msg = "unknown command";
         return out_err(out, ERR_UNKNOWN, err_msg.data(), err_msg.size());
         

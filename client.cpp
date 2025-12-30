@@ -184,10 +184,16 @@ int main() {
     cout << "║     LoopDB Key-Value Store Client        ║\n";
     cout << "╚══════════════════════════════════════════╝\n\n";
     cout << "Available commands:\n";
-    cout << "  • set <key> <value>   - Store a key-value pair\n";
-    cout << "  • get <key>           - Retrieve value by key\n";
-    cout << "  • del <key>           - Delete a key\n";
-    cout << "  • keys                - List all keys\n";
+    cout << "  HashMap commands:\n";
+    cout << "    • set <key> <value>   - Store a key-value pair\n";
+    cout << "    • get <key>           - Retrieve value by key\n";
+    cout << "    • del <key>           - Delete a key\n";
+    cout << "    • keys                - List all keys\n\n";
+    cout << "  AVL Tree commands:\n";
+    cout << "    • avl_set <key> <value>   - Store in AVL tree\n";
+    cout << "    • avl_get <key>           - Retrieve from AVL tree\n";
+    cout << "    • avl_del <key>           - Delete from AVL tree\n";
+    cout << "    • avl_keys                - List all keys (sorted)\n\n";
     cout << "  • quit / exit         - Disconnect\n\n";
 
     string line;
