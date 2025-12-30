@@ -134,10 +134,10 @@ AVLNode* AVLTree::delete_helper(AVLNode* node, const string& key, bool& deleted)
     } else {
         // Node to be deleted found
         deleted = true;
-        node_count--;
         
         // Node with only one child or no child
         if (!node->left || !node->right) {
+            node_count--;
             AVLNode* temp = node->left ? node->left : node->right;
             
             // No child case
